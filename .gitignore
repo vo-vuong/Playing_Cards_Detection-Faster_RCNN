@@ -1,0 +1,26 @@
+# python virtual environment
+.venv
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# vscode config
+.vscode
+
+# dataset folder
+data/*
+!data/.gitkeep
+
+# test data folder
+tests_data/*
+!tests_data/.gitkeep
+
+# trained models folder
+trained_models/*
+!trained_models/.gitkeep
+
+# outputs folder
+trained_models/*
+!trained_models/.gitkeep
