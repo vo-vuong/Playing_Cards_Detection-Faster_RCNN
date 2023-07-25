@@ -1,6 +1,7 @@
-IMAGE_SIZE = (640, 640)
+IMAGE_SIZE = 640
 NUM_EPOCHS = 100
 BATCH_SIZE = 16
+NUM_WORKERS = 4
 LEARNING_RATE = 0.001
 NUM_CLASSES = 53
 # H (Hearts), D (Diamonds), C (Clubs), S (Spades)
