@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import cv2
 from utils.file_helpers import get_new_file
+from utils.download_model import download_best_model
 from constants.config_const import CLASSES, IMAGE_SIZE, NUM_CLASSES, THRESHOLD
 from constants.paths_const import (
     TRAINED_MODEL_PATH,
@@ -38,6 +39,10 @@ if __name__ == "__main__":
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
+
+    model_path = os.path.join(TRAINED_MODEL_PATH, MODEL_FILE)
+    if args.model == model_path and not os.path.exists(model_path):
+        download_best_model()
 
     # Load model
     model = fasterrcnn_mobilenet_v3_large_fpn(
