@@ -3,6 +3,7 @@ NUM_EPOCHS = 100
 BATCH_SIZE = 16
 NUM_WORKERS = 4
 LEARNING_RATE = 0.001
+THRESHOLD = 0.7
 NUM_CLASSES = 53
 # H (Hearts), D (Diamonds), C (Clubs), S (Spades)
 CLASSES = [

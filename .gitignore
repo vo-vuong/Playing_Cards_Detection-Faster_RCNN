@@ -15,12 +15,16 @@ data/*
 
 # test data folder
 tests_data/*
-!tests_data/.gitkeep
+!tests_data/1.jpg
+!tests_data/2.jpg
+!tests_data/3.jpg
+!tests_data/4.jpg
+!tests_data/5.jpg
 
 # trained models folder
 trained_models/*
 !trained_models/.gitkeep
 
 # outputs folder
-trained_models/*
-!trained_models/.gitkeep
+outputs/
+!outputs/.gitkeep
