@@ -210,6 +210,7 @@ if __name__ == "__main__":
 
         # Calculate mean average precision
         map_dict = metric.compute()
+        metric.reset()
         # Save mAP to tensorboard
         writer.add_scalar("Valid/mAP", map_dict["map"].item(), epoch + 1)
         writer.add_scalar("Valid/mAP50", map_dict["map_50"].item(), epoch + 1)
