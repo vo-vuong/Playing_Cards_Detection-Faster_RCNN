@@ -1,25 +1,26 @@
+import argparse
 import os
 import shutil
-import argparse
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from tqdm.autonotebook import tqdm
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize, ColorJitter
-from dataset import PlayingCardDataset
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_fpn
-from constants.paths_const import DATA_PATH, TRAINED_MODEL_PATH, LOG_PATH
+from torchvision.transforms import v2
+from tqdm.autonotebook import tqdm
+
 from constants.config_const import (
     BATCH_SIZE,
     IMAGE_SIZE,
     LEARNING_RATE,
-    NUM_WORKERS,
-    IMAGE_SIZE,
-    NUM_EPOCHS,
     NUM_CLASSES,
+    NUM_EPOCHS,
+    NUM_WORKERS,
 )
+from constants.paths_const import DATA_PATH, LOG_PATH, TRAINED_MODEL_PATH
+from dataset import PlayingCardDataset
 
 
 def get_args():
@@ -33,20 +34,16 @@ def get_args():
     parser.add_argument("--log_path", "-l", type=str, default=LOG_PATH)
     parser.add_argument("--save_path", "-s", type=str, default=TRAINED_MODEL_PATH)
     parser.add_argument("--checkpoint", "-sc", type=str, default=None)
-    args = parser.parse_args()
+    parser.add_argument("--pin_memory", "-pm", type=bool, default=True)
+    parser.add_argument("--prefetch_factor", "-pf", type=int, default=2)
+    parser.add_argument("--persistent_workers", "-pw", type=bool, default=True)
+    parse_args = parser.parse_args()
 
-    return args
+    return parse_args
 
 
 def collate_fn(batch):
-    images = []
-    targets = []
-
-    for i, t in batch:
-        images.append(i)
-        targets.append(t)
-
-    return images, targets
+    return tuple(zip(*batch))
 
 
 if __name__ == "__main__":
@@ -57,20 +54,24 @@ if __name__ == "__main__":
     else:
         device = torch.device("cpu")
 
-    train_transform = Compose(
+    train_transform = v2.Compose(
         [
-            Resize((args.image_size, args.image_size)),
-            ToTensor(),
-            ColorJitter(brightness=0.125, contrast=0.1, saturation=0.1, hue=0.05),
-            Normalize(mean=[0.5531, 0.5128, 0.4813], std=[0.2496, 0.2552, 0.2591]),
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
+            v2.RandomPhotometricDistort(p=0.5),
+            v2.RandomGrayscale(p=0.1),
+            v2.Resize((args.image_size, args.image_size)),
+            v2.RandomErasing(p=0.3, scale=(0.02, 0.1)),
+            v2.ToImageTensor(),
+            v2.ConvertImageDtype(torch.float32),
         ]
     )
 
-    valid_transform = Compose(
+    valid_transform = v2.Compose(
         [
-            Resize((args.image_size, args.image_size)),
-            ToTensor(),
-            Normalize(mean=[0.5531, 0.5128, 0.4813], std=[0.2496, 0.2552, 0.2591]),
+            v2.Resize((args.image_size, args.image_size)),
+            v2.ToImageTensor(),
+            v2.ConvertImageDtype(torch.float32),
         ]
     )
 
@@ -88,6 +89,9 @@ if __name__ == "__main__":
         drop_last=True,
         shuffle=True,
         collate_fn=collate_fn,
+        pin_memory=args.pin_memory,
+        prefetch_factor=args.prefetch_factor,
+        persistent_workers=args.persistent_workers,
     )
 
     valid_dataloader = DataLoader(
@@ -97,23 +101,25 @@ if __name__ == "__main__":
         drop_last=True,
         shuffle=False,
         collate_fn=collate_fn,
+        pin_memory=args.pin_memory,
+        prefetch_factor=args.prefetch_factor,
+        persistent_workers=args.persistent_workers,
     )
 
     # Model initialization
     model = fasterrcnn_mobilenet_v3_large_fpn(
-        num_classes=NUM_CLASSES, trainable_backbone_layers=6
+        num_classes=NUM_CLASSES, trainable_backbone_layers=3
     )
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    start_epoch = 0
     if args.checkpoint:
-        checkpoint = torch.load(args.checkpoint)
+        checkpoint = torch.load(args.checkpoint, map_location=device)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_epoch = checkpoint["epoch"]
         print("Continue training at the epoch: ", start_epoch + 1)
-    else:
-        start_epoch = 0
 
     # Create folder save model
     if not os.path.isdir(args.save_path):
