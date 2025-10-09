@@ -10,16 +10,16 @@ __pycache__/
 .vscode
 
 # dataset folder
-data/*
-!data/.gitkeep
+training_datas/*
+!training_datas/.gitkeep
 
 # test data folder
-tests_data/*
-!tests_data/1.jpg
-!tests_data/2.jpg
-!tests_data/3.jpg
-!tests_data/4.jpg
-!tests_data/5.jpg
+test_images/*
+!test_images/img1.jpg
+!test_images/img2.jpg
+!test_images/img3.jpg
+!test_images/img4.jpg
+!test_images/img5.jpg
 
 # trained models folder
 trained_models/*
@@ -28,3 +28,7 @@ trained_models/*
 # outputs folder
 outputs/
 !outputs/.gitkeep
+
+# tensorboard logs
+tensorboard_logs/*
+!tensorboard_logs/.gitkeep
