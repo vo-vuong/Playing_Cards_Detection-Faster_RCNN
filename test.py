@@ -1,17 +1,15 @@
+import argparse
 import os
+
+import cv2
+import numpy as np
 import torch
 from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_fpn
-import argparse
-import numpy as np
-import cv2
-from utils.file_helpers import get_new_file
-from utils.download_model import download_best_model
+
 from constants.config_const import CLASSES, IMAGE_SIZE, NUM_CLASSES, THRESHOLD
-from constants.paths_const import (
-    TRAINED_MODEL_PATH,
-    MODEL_FILE,
-    TESTS_IMAGE_PATH,
-)
+from constants.paths_const import MODEL_FILE, TESTS_IMAGE_PATH, TRAINED_MODEL_PATH
+from utils.download_model import download_best_model
+from utils.file_helpers import get_new_file
 
 
 def get_args():
@@ -23,7 +21,7 @@ def get_args():
         "--test_images",
         "-i",
         type=str,
-        default=os.path.join(TESTS_IMAGE_PATH, "1.jpg"),
+        default=os.path.join(TESTS_IMAGE_PATH, "img1.jpg"),
     )
     parser.add_argument("--size", "-s", type=int, default=IMAGE_SIZE)
     parser.add_argument("--threshold", "-t", type=float, default=THRESHOLD)
@@ -45,21 +43,22 @@ if __name__ == "__main__":
         download_best_model()
 
     # Load model
-    model = fasterrcnn_mobilenet_v3_large_fpn(
-        num_classes=NUM_CLASSES, trainable_backbone_layers=6
-    )
-    checkpoint = torch.load(args.model)
+    model = fasterrcnn_mobilenet_v3_large_fpn(num_classes=NUM_CLASSES)
+    checkpoint = torch.load(args.model, map_location=device)
     model.load_state_dict(checkpoint["model"])
     model.to(device)
     model.eval()
 
     # # Process the image as input for the model
     ori_image = cv2.imread(args.test_images)
+    if ori_image is None:
+        print(
+            f"Error: Could not load image at '{args.test_images}'. Please check the file path and integrity."
+        )
+        exit(1)
     height, width, _ = ori_image.shape
     image = cv2.cvtColor(ori_image, cv2.COLOR_BGR2RGB)
     image = cv2.resize(image, (args.size, args.size)) / 255
-    image -= np.array([0.5531, 0.5128, 0.4813])
-    image /= np.array([0.2496, 0.2552, 0.2591])
     image = np.transpose(image, (2, 0, 1))
     image = image[None, :, :, :]
     image = torch.from_numpy(image).float()
