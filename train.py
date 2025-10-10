@@ -1,6 +1,7 @@
 import argparse
 import os
 import shutil
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -24,7 +25,7 @@ from dataset import PlayingCardDataset
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="Train a EmotionCNN model")
+    parser = argparse.ArgumentParser(description="Train model")
     parser.add_argument("--data_path", "-d", type=str, default=DATA_PATH)
     parser.add_argument("--image_size", "-i", type=int, default=IMAGE_SIZE)
     parser.add_argument("--num_workers", "-n", type=str, default=NUM_WORKERS)
@@ -46,6 +47,35 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
+def calculate_detailed_metrics(outputs, targets):
+    """Calculate detailed metrics for object detection"""
+    metrics = defaultdict(list)
+
+    for output, target in zip(outputs, targets):
+        pred_boxes = output['boxes']
+        pred_scores = output['scores']
+        # pred_labels = output['labels']
+
+        gt_boxes = target['boxes']
+        # gt_labels = target['labels']
+
+        # Count predictions and ground truths
+        metrics['num_predictions'].append(len(pred_boxes))
+        metrics['num_ground_truths'].append(len(gt_boxes))
+
+        # Average confidence scores
+        if len(pred_scores) > 0:
+            metrics['avg_confidence'].append(pred_scores.mean().item())
+            metrics['max_confidence'].append(pred_scores.max().item())
+            metrics['min_confidence'].append(pred_scores.min().item())
+        else:
+            metrics['avg_confidence'].append(0)
+            metrics['max_confidence'].append(0)
+            metrics['min_confidence'].append(0)
+
+    return metrics
+
+
 if __name__ == "__main__":
     args = get_args()
 
@@ -56,12 +86,8 @@ if __name__ == "__main__":
 
     train_transform = v2.Compose(
         [
-            v2.RandomHorizontalFlip(p=0.5),
-            v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
-            v2.RandomPhotometricDistort(p=0.5),
-            v2.RandomGrayscale(p=0.1),
             v2.Resize((args.image_size, args.image_size)),
-            v2.RandomErasing(p=0.3, scale=(0.02, 0.1)),
+            v2.RandomErasing(p=0.3, scale=(0.01, 0.03)),
             v2.ToImageTensor(),
             v2.ConvertImageDtype(torch.float32),
         ]
@@ -131,30 +157,69 @@ if __name__ == "__main__":
     os.mkdir(args.log_path)
     writer = SummaryWriter(args.log_path)
 
+    # Log hyperparameters
+    writer.add_text(
+        'Hyperparameters',
+        f"""
+    - Learning Rate: {args.lr}
+    - Batch Size: {args.batch_size}
+    - Image Size: {args.image_size}
+    - Num Epochs: {args.epochs}
+    - Num Workers: {args.num_workers}
+    - Device: {device}
+    """,
+        0,
+    )
+
     metric = MeanAveragePrecision(class_metrics=True)
     best_map = 0
     best_epoch = 0
+
+    # Training history
+    history = {'train_loss': [], 'val_map': [], 'val_map_50': [], 'val_map_75': []}
 
     for epoch in range(start_epoch, args.epochs):
         # Train step
         model.train()
         train_loss = []
+        train_loss_classifier = []
+        train_loss_box_reg = []
+        train_loss_objectness = []
+        train_loss_rpn_box_reg = []
+
+        # Learning rate tracking
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar('Train/Learning_Rate', current_lr, epoch)
 
         train_progress_bar = tqdm(train_dataloader, colour="green")
         for i, (images, targets) in enumerate(train_progress_bar):
+            # Move to device
             images = [image.to(device) for image in images]
             final_targets = []
             for t in targets:
-                target = {}
-                target["boxes"] = t["boxes"].to(device)
-                target["labels"] = t["labels"].to(device)
+                target = {
+                    "boxes": t["boxes"].to(device),
+                    "labels": t["labels"].to(device),
+                }
                 final_targets.append(target)
 
             # Forward pass
             output = model(images, final_targets)
+
+            # Extract individual losses
             loss_value = 0
-            for l in output.values():
+            for key, l in output.items():
                 loss_value = loss_value + l
+
+                # Track individual loss components
+                if key == 'loss_classifier':
+                    train_loss_classifier.append(l.item())
+                elif key == 'loss_box_reg':
+                    train_loss_box_reg.append(l.item())
+                elif key == 'loss_objectness':
+                    train_loss_objectness.append(l.item())
+                elif key == 'loss_rpn_box_reg':
+                    train_loss_rpn_box_reg.append(l.item())
 
             # Backward pass
             optimizer.zero_grad()
@@ -164,33 +229,96 @@ if __name__ == "__main__":
             # Optimize
             optimizer.step()
 
-            # Show information on train progress bar
+            # Show detailed information on train progress bar
             train_progress_bar.set_description(
-                "Train epoch {}. Iteration {}/{} Loss {:0.4f}".format(
-                    epoch + 1, i + 1, len(train_dataloader), np.mean(train_loss)
+                f"Train epoch {epoch + 1}/{args.epochs} | "
+                f"Iter {i + 1}/{len(train_dataloader)} | "
+                f"Loss: {np.mean(train_loss):.4f} | "
+                f"Cls: {np.mean(train_loss_classifier) if train_loss_classifier else 0:.4f} | "
+                f"Box: {np.mean(train_loss_box_reg) if train_loss_box_reg else 0:.4f} | "
+                f"Obj: {np.mean(train_loss_objectness) if train_loss_objectness else 0:.4f} | "
+                f"RPN: {np.mean(train_loss_rpn_box_reg) if train_loss_rpn_box_reg else 0:.4f} | "
+            )
+
+            # Save detailed training losses to tensorboard
+            global_step = i + epoch * len(train_dataloader)
+            writer.add_scalar('Train/Total_Loss', loss_value.item(), global_step)
+
+            if train_loss_classifier:
+                writer.add_scalar(
+                    'Train/Loss_Classifier', train_loss_classifier[-1], global_step
                 )
-            )
-            # Save training loss to tensorboard
+            if train_loss_box_reg:
+                writer.add_scalar(
+                    'Train/Loss_Box_Reg', train_loss_box_reg[-1], global_step
+                )
+            if train_loss_objectness:
+                writer.add_scalar(
+                    'Train/Loss_Objectness', train_loss_objectness[-1], global_step
+                )
+            if train_loss_rpn_box_reg:
+                writer.add_scalar(
+                    'Train/Loss_RPN_Box_Reg', train_loss_rpn_box_reg[-1], global_step
+                )
+
+        # Calculate epoch statistics
+        epoch_train_loss = np.mean(train_loss)
+
+        # Save epoch summary
+        writer.add_scalar('Train/Epoch_Loss', epoch_train_loss, epoch + 1)
+
+        if train_loss_classifier:
             writer.add_scalar(
-                "Train/Loss", np.mean(train_loss), i + epoch * len(train_dataloader)
+                'Train/Epoch_Loss_Classifier', np.mean(train_loss_classifier), epoch + 1
             )
+        if train_loss_box_reg:
+            writer.add_scalar(
+                'Train/Epoch_Loss_Box_Reg', np.mean(train_loss_box_reg), epoch + 1
+            )
+        if train_loss_objectness:
+            writer.add_scalar(
+                'Train/Epoch_Loss_Objectness', np.mean(train_loss_objectness), epoch + 1
+            )
+        if train_loss_rpn_box_reg:
+            writer.add_scalar(
+                'Train/Epoch_Loss_RPN_Box_Reg',
+                np.mean(train_loss_rpn_box_reg),
+                epoch + 1,
+            )
+
+        print(f"\nEpoch {epoch + 1} Training Summary:")
+        print(f"  - Total Loss: {epoch_train_loss:.4f}")
+        print(f"  - Learning Rate: {current_lr:.6f}")
 
         # Validation step
         model.eval()
         val_progress_bar = tqdm(valid_dataloader, colour="yellow")
+
+        # Validation metrics
+        val_predictions_count = []
+        val_gt_count = []
+        val_confidence_scores = []
+
         for i, (images, targets) in enumerate(val_progress_bar):
             # Move tensors to the configured device
             images = list(image.to(device) for image in images)
             targets_list = []
             for t in targets:
-                target = {}
-                target["boxes"] = t["boxes"].to(device)
-                target["labels"] = t["labels"].to(device)
+                target = {
+                    "boxes": t["boxes"].to(device),
+                    "labels": t["labels"].to(device),
+                }
                 targets_list.append(target)
 
             # Model prediction
             with torch.no_grad():
                 outputs = model(images)
+
+            # Calculate detailed metrics
+            detailed_metrics = calculate_detailed_metrics(outputs, targets_list)
+            val_predictions_count.extend(detailed_metrics['num_predictions'])
+            val_gt_count.extend(detailed_metrics['num_ground_truths'])
+            val_confidence_scores.extend(detailed_metrics['avg_confidence'])
 
             boxes = []
             labels = []
@@ -207,20 +335,67 @@ if __name__ == "__main__":
 
             metric.update(preds, targets_list)
 
-            # Show information on valid progress bar
+            # Show detailed information on valid progress bar
             val_progress_bar.set_description(
-                "Valid epoch {}. Iteration {}/{}".format(
-                    epoch + 1, i + 1, len(valid_dataloader)
-                )
+                f"Valid epoch {epoch + 1}/{args.epochs} | "
+                f"Iter {i + 1}/{len(valid_dataloader)} | "
+                f"Avg Preds: {np.mean(val_predictions_count):.1f} | "
+                f"Avg Ground Truths: {np.mean(val_gt_count):.1f} | "
+                f"Avg Conf: {np.mean(val_confidence_scores):.3f}"
             )
 
         # Calculate mean average precision
         map_dict = metric.compute()
         metric.reset()
-        # Save mAP to tensorboard
+
+        # Save all mAP metrics to tensorboard
         writer.add_scalar("Valid/mAP", map_dict["map"].item(), epoch + 1)
-        writer.add_scalar("Valid/mAP50", map_dict["map_50"].item(), epoch + 1)
-        writer.add_scalar("Valid/mAP75", map_dict["map_75"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAP_50", map_dict["map_50"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAP_75", map_dict["map_75"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAP_small", map_dict["map_small"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAP_medium", map_dict["map_medium"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAP_large", map_dict["map_large"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAR_1", map_dict["mar_1"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAR_10", map_dict["mar_10"].item(), epoch + 1)
+        writer.add_scalar("Valid/mAR_100", map_dict["mar_100"].item(), epoch + 1)
+
+        # Additional validation metrics
+        writer.add_scalar(
+            "Valid/Avg_Predictions_Per_Image", np.mean(val_predictions_count), epoch + 1
+        )
+        writer.add_scalar(
+            "Valid/Avg_Ground_Truths_Per_Image", np.mean(val_gt_count), epoch + 1
+        )
+        writer.add_scalar(
+            "Valid/Avg_Confidence_Score", np.mean(val_confidence_scores), epoch + 1
+        )
+
+        # Per-class metrics (if available)
+        if 'map_per_class' in map_dict:
+            for class_idx, class_map in enumerate(map_dict['map_per_class']):
+                if not torch.isnan(class_map):
+                    writer.add_scalar(
+                        f"Valid/mAP_Class_{class_idx}", class_map.item(), epoch + 1
+                    )
+
+        # Update history
+        history['train_loss'].append(epoch_train_loss)
+        history['val_map'].append(map_dict["map"].item())
+        history['val_map_50'].append(map_dict["map_50"].item())
+        history['val_map_75'].append(map_dict["map_75"].item())
+
+        print(f"\nEpoch {epoch + 1} Validation Summary:")
+        print(f"  - mAP: {map_dict['map'].item():.4f}")
+        print(f"  - mAP@50: {map_dict['map_50'].item():.4f}")
+        print(f"  - mAP@75: {map_dict['map_75'].item():.4f}")
+        print(f"  - mAP (small): {map_dict['map_small'].item():.4f}")
+        print(f"  - mAP (medium): {map_dict['map_medium'].item():.4f}")
+        print(f"  - mAP (large): {map_dict['map_large'].item():.4f}")
+        print(f"  - mAR@1: {map_dict['mar_1'].item():.4f}")
+        print(f"  - mAR@10: {map_dict['mar_10'].item():.4f}")
+        print(f"  - mAR@100: {map_dict['mar_100'].item():.4f}")
+        print(f"  - Avg Predictions/Image: {np.mean(val_predictions_count):.1f}")
+        print(f"  - Avg Ground Truths/Image: {np.mean(val_gt_count):.1f}")
 
         checkpoint = {
             "epoch": epoch + 1,
@@ -233,7 +408,17 @@ if __name__ == "__main__":
             best_map = map_dict["map"].item()
             best_epoch = epoch
             torch.save(checkpoint, os.path.join(args.save_path, "best.pt"))
+            print(f"New best model saved! Best mAP: {best_map:.4f}")
+        else:
+            print(f"Current best mAP: {best_map:.4f} (Epoch {best_epoch + 1})")
 
-        if epoch - best_epoch == 3:  # Early Stopping
-            print("Activate early stopping at epoch: ", epoch + 1)
+        # Early Stopping Check
+        if epoch - best_epoch >= 3:
+            print(f"\nEarly stopping activated at epoch {epoch + 1}")
             break
+
+    # Training completed
+    print(f"Best mAP: {best_map:.4f} at epoch {best_epoch + 1}")
+
+    # Close tensorboard writer
+    writer.close()
