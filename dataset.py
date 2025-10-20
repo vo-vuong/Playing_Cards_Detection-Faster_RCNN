@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from torchvision import tv_tensors
+from torchvision.tv_tensors import BoundingBoxFormat
 
 from constants.config_const import CLASSES
 from constants.paths_const import ANNOTATIONS_ORG_FILE, DATA_PATH
@@ -48,6 +50,9 @@ class PlayingCardDataset(Dataset):
         image_path = os.path.join(self.data_path, current_image["file_name"])
         image = Image.open(image_path).convert("RGB")
 
+        # Store original image size for BoundingBoxes format
+        img_width, img_height = image.size
+
         # get annotations of this item
         annotations = self.image_to_annotations.get(current_image["id"], [])
 
@@ -72,6 +77,13 @@ class PlayingCardDataset(Dataset):
         else:
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
             labels = torch.as_tensor(labels, dtype=torch.int64)
+
+        # Convert to TVTensors format - this is the key change!
+        boxes = tv_tensors.BoundingBoxes(
+            boxes,
+            format=BoundingBoxFormat.XYXY,
+            canvas_size=(img_height, img_width),
+        )
 
         target = {
             "boxes": boxes,
